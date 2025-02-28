@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MQTT WebSocket 客户端</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            width: 80%;
+            margin: 0 auto;
+            padding-top: 50px;
+        }
+        label, input, button, textarea {
+            display: block;
+            margin: 10px 0;
+        }
+        #messages {
+            width: 100%;
+            height: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MQTT WebSocket 客户端</h1>
+        <label for="clientId">Client ID:</label>
+        <input type="text" id="clientId" placeholder="输入Client ID">
+        <label for="topic">订阅主题:</label>
+        <input type="text" id="topic" placeholder="输入订阅主题" value="testtopic">
+        <button onclick="startMqtt()">开始</button>
+        <label for="message">发送消息:</label>
+        <textarea id="message" placeholder="输入要发送的消息"></textarea>
+        <button onclick="sendMessage()">发送</button>
+        <h2>接收到的消息:</h2>
+        <textarea id="messages" readonly></textarea>
+    </div>
+
+    <script>
+        let client;
+
+        function startMqtt() {
+            const clientId = document.getElementById('clientId').value;
+            const topic = document.getElementById('topic').value;
+            const host = 'ws://broker.emqx.io:8083/mqtt';
+            const options = {
+                keepalive: 60,
+                clientId: clientId,
+                clean: true,
+                reconnectPeriod: 1000,
+                connectTimeout: 30 * 1000,
+            };
+
+            client = mqtt.connect(host, options);
+
+            client.on('connect', () => {
+                console.log('Client connected:', clientId);
+                client.subscribe(topic, { qos: 0 }, (err) => {
+                    if (!err) {
+                        console.log('Subscribed to topic:', topic);
+                    }
+                });
+            });
+
+            client.on('error', (err) => {
+                console.log('Connection error:', err);
+                client.end();
+            });
+
+            client.on('reconnect', () => {
+                console.log('Reconnecting...');
+            });
+
+            client.on('message', (topic, message, packet) => {
+                const messages = document.getElementById('messages');
+                messages.value += `Received Message: ${message.toString()}\nOn topic: ${topic}\n\n`;
+                messages.scrollTop = messages.scrollHeight; // 自动滚动到底部
+            });
+        }
+
+        function sendMessage() {
+            const topic = document.getElementById('topic').value;
+            const message = document.getElementById('message').value;
+
+            if (client.connected) {
+                client.publish(topic, message, { qos: 0, retain: false });
+                console.log('Message sent:', message);
+            } else {
+                alert('请先连接MQTT服务器并订阅主题！');
+            }
+        }
+    </script>
+</body>
+</html>
