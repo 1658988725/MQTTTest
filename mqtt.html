@@ -45,7 +45,7 @@
         function startMqtt() {
             const clientId = document.getElementById('clientId').value;
             const topic = document.getElementById('topic').value;
-            const host = 'wss://broker.emqx.io:8883/mqtt';
+            const host = 'wss://broker.emqx.io:8084/mqtt';
             const options = {
                 keepalive: 60,
                 clientId: clientId,
