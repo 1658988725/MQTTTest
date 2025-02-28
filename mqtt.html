@@ -6,91 +6,103 @@
     <title>MQTT WebSocket 客户端</title>
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .input-group { margin: 15px 0; }
+        input, button, textarea { 
+            width: 100%; 
+            padding: 8px; 
+            margin: 5px 0; 
+            border: 1px solid #ddd;
+            border-radius: 4px;
         }
-        .container {
-            width: 80%;
-            margin: 0 auto;
-            padding-top: 50px;
-        }
-        label, input, button, textarea {
-            display: block;
-            margin: 10px 0;
-        }
-        #messages {
-            width: 100%;
-            height: 200px;
-        }
+        button { background: #007bff; color: white; border: none; cursor: pointer; }
+        #messages { height: 300px; resize: vertical; }
+        .status { color: #666; font-size: 0.9em; margin: 10px 0; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>MQTT WebSocket 客户端</h1>
-        <label for="clientId">Client ID:</label>
-        <input type="text" id="clientId" placeholder="输入Client ID">
-        <label for="topic">订阅主题:</label>
-        <input type="text" id="topic" placeholder="输入订阅主题" value="testtopic">
-        <button onclick="startMqtt()">开始</button>
-        <label for="message">发送消息:</label>
-        <textarea id="message" placeholder="输入要发送的消息"></textarea>
-        <button onclick="sendMessage()">发送</button>
-        <h2>接收到的消息:</h2>
-        <textarea id="messages" readonly></textarea>
+        <h2>MQTT 客户端 (自动生成12位ID)</h2>
+        <div class="input-group">
+            <label>订阅主题:</label>
+            <input type="text" id="topic" value="test/topic" placeholder="输入订阅主题">
+        </div>
+        <button onclick="connectMqtt()">连接服务</button>
+        
+        <div class="status" id="status"></div>
+        
+        <div class="input-group">
+            <label>发送消息:</label>
+            <textarea id="sendMsg" placeholder="输入消息内容"></textarea>
+            <button onclick="publishMessage()">发布消息</button>
+        </div>
+        
+        <div class="input-group">
+            <label>接收消息:</label>
+            <textarea id="messages" readonly></textarea>
+        </div>
     </div>
 
     <script>
-        let client;
+        let mqttClient = null;
+        const brokerUrl = 'ws://broker.emqx.io:8083/mqtt';
 
-        function startMqtt() {
-            const clientId = document.getElementById('clientId').value;
+        // 生成12位随机ID‌:ml-citation{ref="1,4" data="citationList"}
+        function generateClientId() {
+            const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // 排除易混淆字符
+            let result = '';
+            for(let i=0; i<12; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
+        }
+
+        // 连接MQTT服务‌:ml-citation{ref="5,5" data="citationList"}
+        function connectMqtt() {
+            const clientId = generateClientId();
             const topic = document.getElementById('topic').value;
-            const host = 'ws://broker.emqx.io:8083/mqtt';
-            const options = {
-                keepalive: 60,
+            
+            mqttClient = mqtt.connect(brokerUrl, {
                 clientId: clientId,
                 clean: true,
-                reconnectPeriod: 1000,
-                connectTimeout: 30 * 1000,
-            };
+                reconnectPeriod: 5000
+            });
 
-            client = mqtt.connect(host, options);
-
-            client.on('connect', () => {
-                console.log('Client connected:', clientId);
-                client.subscribe(topic, { qos: 0 }, (err) => {
-                    if (!err) {
-                        console.log('Subscribed to topic:', topic);
-                    }
+            mqttClient.on('connect', () => {
+                updateStatus(`已连接 | ClientID: ${clientId}`);
+                mqttClient.subscribe(topic, { qos: 0 }, (err) => {
+                    if(err) console.error('订阅失败:', err);
                 });
             });
 
-            client.on('error', (err) => {
-                console.log('Connection error:', err);
-                client.end();
+            mqttClient.on('message', (topic, message) => {
+                const msgBox = document.getElementById('messages');
+                msgBox.value += `[${new Date().toLocaleTimeString()}] ${topic}: ${message}\n`;
+                msgBox.scrollTop = msgBox.scrollHeight;
             });
 
-            client.on('reconnect', () => {
-                console.log('Reconnecting...');
-            });
-
-            client.on('message', (topic, message, packet) => {
-                const messages = document.getElementById('messages');
-                messages.value += `Received Message: ${message.toString()}\nOn topic: ${topic}\n\n`;
-                messages.scrollTop = messages.scrollHeight; // 自动滚动到底部
+            mqttClient.on('error', (err) => {
+                updateStatus(`连接错误: ${err}`);
+                mqttClient.end();
             });
         }
 
-        function sendMessage() {
+        // 发布消息‌:ml-citation{ref="5,3" data="citationList"}
+        function publishMessage() {
             const topic = document.getElementById('topic').value;
-            const message = document.getElementById('message').value;
-
-            if (client.connected) {
-                client.publish(topic, message, { qos: 0, retain: false });
-                console.log('Message sent:', message);
+            const message = document.getElementById('sendMsg').value;
+            
+            if(mqttClient && mqttClient.connected) {
+                mqttClient.publish(topic, message);
+                document.getElementById('sendMsg').value = '';
             } else {
-                alert('请先连接MQTT服务器并订阅主题！');
+                alert('请先连接MQTT服务');
             }
+        }
+
+        function updateStatus(text) {
+            document.getElementById('status').innerHTML = text;
         }
     </script>
 </body>
