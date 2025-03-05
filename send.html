@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WebRTC Streamer</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .video-container {
+            display: flex;
+            flex-direction: row;
+            height: calc(100% - 60px);
+            width: 100%;
+            gap: 10px;
+            align-items: stretch;
+            flex-wrap: nowrap;
+        }
+
+        video {
+            width: 100%;
+            max-width: 400px;
+            height: auto;
+            flex: 1 1 300px;
+            background: #000;
+            flex-shrink: 0;
+            object-fit: cover;
+        }
+
+        .log-container {
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            background: #f8f9fa;
+            flex: 1 1 100%;
+            min-width: 280px;
+            display: flex;
+            flex-direction: column;
+            margin-left: 0;
+            height: 100%;
+            overflow: auto;
+        }
+
+        #logOutput {
+            padding: 5px;
+            line-height: 1.1;
+        }
+
+        #logOutput div {
+            margin: 0 0 1px 0;
+            padding: 0;
+            font-size: 0.85em;
+        }
+
+        #logOutput {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 5px;
+            font-family: monospace;
+            background: white;
+            white-space: pre-wrap;
+            line-height: 1.2;
+            margin: 0;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 8px;
+        }
+
+        button {
+            padding: 12px 24px;
+            min-width: 120px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 768px) {
+            .video-container {
+                flex-direction: column;
+                height: calc(100% - 120px);
+            }
+            
+            video {
+                max-width: 100%;
+                height: 50vh;
+            }
+            
+            .controls {
+                gap: 8px;
+                padding: 4px;
+            }
+            
+            button {
+                padding: 10px 16px;
+                font-size: 14px;
+                flex: 1 1 100%;
+            }
+            
+            input[type="text"] {
+                width: 100% !important;
+                box-sizing: border-box;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="video-container">
+        <div class="video-group">
+            <video id="localVideo" autoplay muted></video>
+        </div>
+        <div class="log-container">
+            <pre id="logOutput"></pre>
+        </div>
+    </div>
+    <div class="controls">
+        <div class="stream-id">
+            <input type="text" id="streamId" placeholder="Stream ID" style="width: 240px; padding: 8px;">
+            <button onclick="generateStreamId()">Generate</button>
+        </div>
+        <button onclick="startPublishing()">Start Publishing</button>
+    </div>
+
+    <script>
+        // 日志输出功能
+        const logOutput = document.getElementById('logOutput');
+        function log(type, message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const colorMap = {
+                connection: '#4CAF50',
+                error: '#FF5722',
+                signaling: '#2196F3',
+                ice: '#9C27B0',
+                mqtt: '#FF9800'
+            };
+            const logEntry = document.createElement('div');
+            logEntry.style.marginBottom = '1px'; // 紧凑的间距
+            logEntry.innerHTML = `
+                <span style="color: ${colorMap[type] || '#000'}">
+                    [${timestamp}] ${message}
+                </span>
+            `;
+            logOutput.appendChild(logEntry);
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+        // 初始化全局变量
+        let mqttClient = null;
+        let localStream = null;
+        let peerConnection = null;
+
+        // 生成10字节唯一ID（20字符hex）
+        const clientId = Array.from(crypto.getRandomValues(new Uint8Array(10)))
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+        let streamId = '3425e9b52c4f67df3090';
+
+        function generateStreamId() {
+            streamId = Array.from(crypto.getRandomValues(new Uint8Array(10)))
+                .map(b => b.toString(16).padStart(2, '0')).join('');
+            document.getElementById('streamId').value = streamId;
+            // log("connection", `生成新Stream ID: ${streamId}`);
+        }
+
+        // MQTT连接配置
+        const mqttOptions = {
+            host: 'broker.emqx.io',
+            port: 8084,
+            path: '/mqtt',
+            protocol: 'wss',
+            clientId: clientId
+        };
+
+        // WebRTC配置
+        const rtcConfig = {
+            iceServers: [{
+                urls: "stun:stun.l.google.com:19302"
+            }]
+        };
+
+        // 初始化MQTT连接
+        function connectMQTT() {
+            mqttClient = mqtt.connect(mqttOptions);
+            log("connection", '当前Stream ID:' + streamId);
+
+            mqttClient.on('connect', () => {
+                log('mqtt', `MQTT连接成功 客户端ID: ${clientId} 协议: ${mqttOptions.protocol}://${mqttOptions.host}:${mqttOptions.port} 路径: ${mqttOptions.path}`);
+            });
+
+            mqttClient.on('error', (err) => {
+                log('error', `MQTT连接错误: ${err.message}`);
+            });
+
+            mqttClient.on('message', (topic, payload) => {
+                log('mqtt', `收到MQTT消息 主题: ${topic} 长度: ${payload.byteLength}字节 ${payload.toString()}`);
+            });
+        }
+
+        // 推流端逻辑
+        async function startPublishing() {
+            setButtonsDisabled(true);
+            try {
+                // 生成推流端唯一ID
+                const publishStreamId = 'publish/' + streamId;
+                const publishMqttClient = mqtt.connect(mqttOptions);
+
+                // 初始化推流端PeerConnection
+                const publisherPeerConnection = new RTCPeerConnection(rtcConfig);
+
+                // 获取本地媒体流
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false
+                });
+                document.getElementById('localVideo').srcObject = localStream;
+
+                // 添加本地流轨道
+                localStream.getTracks().forEach(track => {
+                    publisherPeerConnection.addTrack(track, localStream);
+                });
+
+                // 推流端ICE候选处理
+                publisherPeerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        const message = {
+                            type: 'publisher-ice',
+                            candidate: event.candidate
+                        };
+                    }
+                };
+
+                // 创建并发送Offer
+                const offer = await publisherPeerConnection.createOffer();
+                await publisherPeerConnection.setLocalDescription(offer);
+
+                const offerMessage = {
+                    type: 'publisher-offer',
+                    sdp: offer.sdp,
+                    streamId: streamId
+                };
+                const topic = 'play/' + streamId;
+                // log('mqtt', `发送推流端Offer 主题: ${topic} 类型: ${offerMessage.type} 数据长度: ${JSON.stringify(offerMessage).length}字节 ` + JSON.stringify(offerMessage));
+                // publishMqttClient.publish(topic, JSON.stringify(offerMessage));
+
+                // 订阅播放端应答
+                publishMqttClient.subscribe('publish/' + streamId);
+                publishMqttClient.on('message', async (topic, payload) => {
+                    const message = JSON.parse(payload.toString());
+                    log('info', `mqtt接收:` + JSON.stringify(message));
+                    if (message.type === 'player-answer') {
+                        publisherPeerConnection.setRemoteDescription(
+                            new RTCSessionDescription({ type: 'answer', sdp: message.sdp })
+                        );
+                    }
+                    if (message.type === 'player-init') {
+                        try {
+                            // 重新创建并发送offer
+                            const newOffer = await publisherPeerConnection.createOffer();
+                            await publisherPeerConnection.setLocalDescription(newOffer);
+                            const newOfferMessage = {
+                                type: 'publisher-offer',
+                                sdp: newOffer.sdp,
+                                streamId: streamId
+                            };
+                            publishMqttClient.publish('play/' + streamId, JSON.stringify(newOfferMessage));
+                            log('signaling', '重新发送推流端offer' + JSON.stringify(newOfferMessage));
+                            log('signaling', '重新发送推流端offer newOffer.sdp\r\n' + newOffer.sdp);
+
+                        } catch (error) {
+                            log('error', `处理player-init失败: ${error.message}`);
+                        }
+                    }
+                    if (message.type === 'player-ice') {
+                        publisherPeerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+                        log('error', `message.candidate:   ` + JSON.stringify(message.candidate));
+                    }
+                });
+
+            } catch (error) {
+                handleError(error, '推流端');
+            } finally {
+                setButtonsDisabled(false);
+            }
+        }
+
+        // 初始化时生成streamID
+        window.addEventListener('load', () => {
+            generateStreamId();
+        });
+
+        // 添加按钮状态管理
+        function setButtonsDisabled(state) {
+            document.querySelectorAll('button').forEach(btn => {
+                btn.disabled = state;
+            });
+        }
+    </script>
+</body>
+
+</html>
